@@ -1,19 +1,39 @@
+"""
+utils/ui.py — Composants d'interface partagés entre toutes les pages.
+
+Contient :
+  - La palette de couleurs et le CSS global injecté dans Streamlit
+  - Le système d'authentification (login / session state)
+  - La sidebar commune (sélecteur établissement + déconnexion)
+  - Les helpers de mise en page (page_header, section_title, paginate)
+  - Les dialogues modaux réutilisables (suppression, duplication de profil)
+"""
+
 import os
 import streamlit as st
 from utils.db import run_update, audit
 from utils.queries import etablissements_list
 
-# ── Palette ───────────────────────────────────────────────────────────────────
-CORAIL      = "#EA4D49"
-BLEU        = "#37306E"
-BLEU_NUIT   = "#042638"
-TURQUOISE   = "#4CBFDC"
-BEIGE       = "#FFF5E9"
 
+# ── Palette de couleurs HospiConnect ──────────────────────────────────────────
+# Ces constantes sont aussi importées par les pages qui construisent du HTML inline.
+CORAIL    = "#EA4D49"
+BLEU      = "#37306E"
+BLEU_NUIT = "#042638"
+TURQUOISE = "#4CBFDC"
+BEIGE     = "#FFF5E9"
+
+
+# ── CSS global ────────────────────────────────────────────────────────────────
+# Streamlit ne propose pas d'API native de thématisation complète ; le seul
+# moyen de surcharger les styles est d'injecter du CSS via st.markdown avec
+# unsafe_allow_html=True. Les sélecteurs ciblent les classes internes de
+# Streamlit (préfixe "css") et les data-testid exposés dans le DOM.
 CSS = f"""
 <style>
     html, body, [class*="css"] {{ font-family: Arial, sans-serif; }}
 
+    /* Sidebar : fond bleu nuit, texte beige */
     section[data-testid="stSidebar"] {{
         background-color: {BLEU_NUIT};
     }}
@@ -25,6 +45,7 @@ CSS = f"""
         font-weight: bold;
     }}
 
+    /* Titres principaux et de section */
     .main-title {{
         color: {BLEU};
         font-size: 2rem;
@@ -39,6 +60,8 @@ CSS = f"""
         font-weight: bold;
         margin-top: 1rem;
     }}
+
+    /* Cartes de métriques (page d'accueil) */
     .metric-card {{
         background: {BEIGE};
         border-left: 4px solid {CORAIL};
@@ -55,6 +78,8 @@ CSS = f"""
         color: #666;
         font-size: .9rem;
     }}
+
+    /* Expanders et boutons */
     .stExpander {{ border: 1px solid {TURQUOISE}; border-radius: 6px; }}
     .stButton > button {{
         background-color: {CORAIL};
@@ -68,41 +93,59 @@ CSS = f"""
         background-color: {BLEU};
         color: {BEIGE};
     }}
+
+    /* En-têtes de tableaux st.dataframe */
     thead tr th {{
         background-color: {BLEU} !important;
         color: {BEIGE} !important;
     }}
+
     .stAlert {{ border-radius: 4px; }}
 </style>
 """
 
+# Nombre d'éléments par page dans les listes paginées
 PAGE_SIZE = 10
 
 
 def apply_styles():
+    """Injecte le CSS global HospiConnect dans la page courante."""
     st.markdown(CSS, unsafe_allow_html=True)
 
 
 def page_header(title: str):
+    """Affiche le titre principal de la page (h1 stylisé)."""
     st.markdown(f'<div class="main-title">{title}</div>', unsafe_allow_html=True)
 
 
 def section_title(title: str):
+    """Affiche un sous-titre de section (h2 stylisé)."""
     st.markdown(f'<div class="section-title">{title}</div>', unsafe_allow_html=True)
 
 
 # ── Authentification ──────────────────────────────────────────────────────────
+# Identifiants lus depuis les variables d'environnement (fichier .env).
+# En l'absence de variable, les valeurs par défaut sont "admin"/"admin".
 _AUTH_USER = os.getenv("AUTH_USERNAME", "admin")
 _AUTH_PASS = os.getenv("AUTH_PASSWORD", "admin")
 
 
 def require_auth():
+    """
+    Bloque le rendu de la page si l'utilisateur n'est pas connecté.
+
+    Vérifie la clé "authenticated" dans st.session_state (persistante entre
+    les réexécutions Streamlit tant que l'onglet reste ouvert).
+    st.stop() interrompt immédiatement l'exécution du script courant, ce qui
+    empêche tout affichage de contenu protégé.
+    """
     if not st.session_state.get("authenticated"):
         _show_login()
         st.stop()
 
 
 def _show_login():
+    """Affiche le formulaire de connexion centré dans la page."""
     apply_styles()
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -113,6 +156,8 @@ def _show_login():
             password = st.text_input("Mot de passe", type="password")
             if st.form_submit_button("Se connecter", use_container_width=True):
                 if username == _AUTH_USER and password == _AUTH_PASS:
+                    # On stocke l'état de connexion dans la session Streamlit.
+                    # Ces clés sont lues par require_auth() et render_sidebar().
                     st.session_state["authenticated"] = True
                     st.session_state["current_user"]  = username
                     st.rerun()
@@ -120,9 +165,20 @@ def _show_login():
                     st.error("Identifiant ou mot de passe incorrect.")
 
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
+# ── Sidebar commune ───────────────────────────────────────────────────────────
+
 def render_sidebar() -> int | None:
-    """Renders shared sidebar content and returns selected_etab_id (or None)."""
+    """
+    Affiche la sidebar partagée et retourne l'id de l'établissement sélectionné.
+
+    La sidebar contient :
+    - Le nom de l'utilisateur connecté
+    - Un sélecteur d'établissement (filtre global utilisé par plusieurs pages)
+    - Un bouton de déconnexion
+
+    La valeur retournée (None si "— Tous —") est transmise aux requêtes pour
+    filtrer les listes d'applications, de profils, etc.
+    """
     with st.sidebar:
         st.markdown("## 🔐 SI Habilitations")
         user = st.session_state.get("current_user", "")
@@ -132,18 +188,19 @@ def render_sidebar() -> int | None:
         )
         st.markdown("---")
 
-        etabs = etablissements_list()
-        etab_map  = {e["nom"]: e["id"] for e in etabs}
+        etabs      = etablissements_list()
+        etab_map   = {e["nom"]: e["id"] for e in etabs}
         etab_names = ["— Tous —"] + list(etab_map.keys())
         sel = st.selectbox(
             "Établissement",
             etab_names,
-            key="sidebar_etab",
+            key="sidebar_etab",  # clé stable : préserve la sélection entre pages
         )
-        selected_etab_id = etab_map.get(sel)
+        selected_etab_id = etab_map.get(sel)  # None si "— Tous —"
 
         st.markdown("---")
         if st.button("🚪 Se déconnecter", use_container_width=True):
+            # Réinitialisation de l'état de session pour forcer le formulaire de login
             st.session_state["authenticated"] = False
             st.session_state["current_user"]  = None
             st.rerun()
@@ -152,10 +209,19 @@ def render_sidebar() -> int | None:
 
 
 # ── Pagination ────────────────────────────────────────────────────────────────
+
 def paginate(items: list, key: str) -> list:
+    """
+    Découpe une liste en pages de PAGE_SIZE éléments et affiche les contrôles
+    de navigation. Retourne le sous-ensemble correspondant à la page courante.
+
+    Paramètre key : identifiant unique pour stocker le numéro de page en session
+    (chaque liste paginée doit avoir sa propre clé pour ne pas interférer).
+    """
     n = len(items)
     if n <= PAGE_SIZE:
-        return items
+        return items  # pas de pagination nécessaire
+
     total_pages = (n + PAGE_SIZE - 1) // PAGE_SIZE
     pkey = f"_page_{key}"
     if pkey not in st.session_state:
@@ -180,6 +246,10 @@ def paginate(items: list, key: str) -> list:
 
 
 # ── Dialogue de confirmation de suppression ───────────────────────────────────
+# @st.dialog crée une modale native Streamlit (disponible depuis la v1.32).
+# La logique est stockée dans session_state["_pending_delete"] pour survivre
+# à la réexécution du script déclenchée par l'ouverture de la modale.
+
 @st.dialog("Confirmer la suppression")
 def _confirm_delete_dialog():
     action = st.session_state.get("_pending_delete")
@@ -200,6 +270,13 @@ def _confirm_delete_dialog():
 
 
 def request_delete(label: str, sql: str, params: tuple, table: str, record_id: int):
+    """
+    Déclenche la modale de confirmation avant d'exécuter une suppression.
+
+    Le dict _pending_delete contient tout ce qu'il faut pour exécuter la
+    suppression sans que la page appelante ait à re-passer ces informations
+    lors de la réexécution du script.
+    """
     st.session_state["_pending_delete"] = {
         "label": label, "sql": sql, "params": params,
         "table": table, "record_id": record_id,
@@ -208,8 +285,16 @@ def request_delete(label: str, sql: str, params: tuple, table: str, record_id: i
 
 
 # ── Dialogue de duplication de profil ─────────────────────────────────────────
+
 @st.dialog("Dupliquer le profil")
 def _dup_profil_dialog():
+    """
+    Modale qui copie un profil et toutes ses habilitations sous un nouveau nom.
+
+    La duplication est atomique : profil + toutes ses habilitations sont insérés
+    avant de relancer la page. En cas de nom déjà pris (IntegrityError), on
+    affiche l'erreur sans interrompre la session.
+    """
     from utils.db import run_insert as _insert
     src = st.session_state.get("_dup_profil")
     if not src:
@@ -230,6 +315,7 @@ def _dup_profil_dialog():
                     "SELECT id_droit, valeur FROM habilitations WHERE id_profil=%s",
                     (src["id"],),
                 )
+                # Copie ligne à ligne des habilitations du profil source
                 for h in habs:
                     _insert(
                         "INSERT INTO habilitations (id_profil, id_droit, valeur) VALUES (%s,%s,%s)",
@@ -249,5 +335,6 @@ def _dup_profil_dialog():
 
 
 def request_dup_profil(profil: dict):
+    """Déclenche la modale de duplication pour le profil donné."""
     st.session_state["_dup_profil"] = profil
     _dup_profil_dialog()

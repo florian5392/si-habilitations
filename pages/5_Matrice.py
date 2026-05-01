@@ -1,3 +1,19 @@
+"""
+pages/5_Matrice.py — Matrice interactive des habilitations.
+
+C'est la page centrale de l'application : elle permet de visualiser et modifier
+toutes les habilitations d'une application (profils en lignes, droits en colonnes).
+
+Elle comporte trois onglets :
+  - Édition    : data_editor Streamlit (modifications en temps réel)
+  - Import     : chargement depuis Excel (.xlsx) ou CSV
+  - Vue lecture: tableau HTML imprimable via window.print()
+
+Stratégie de chargement : hab_cache (dict {(id_profil, id_droit): valeur}) est
+construit en amont avec N×M requêtes minimisées via habilitation_get() en boucle.
+Cela évite de requêter la BDD dans les boucles de rendu du tableau HTML.
+"""
+
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -17,7 +33,7 @@ require_auth()
 selected_etab_id = render_sidebar()
 page_header("📊 Matrice des habilitations")
 
-# ── Sélection application ─────────────────────────────────────────────────────
+# ── Sélection de l'application ────────────────────────────────────────────────
 apps = applications_list(selected_etab_id)
 if not apps:
     st.info("Aucune application disponible.")
@@ -37,12 +53,16 @@ if not droits:
     st.info("Aucun droit défini pour cette application.")
     st.stop()
 
-# ── Caches ────────────────────────────────────────────────────────────────────
+# ── Pré-chargement des données ────────────────────────────────────────────────
+# valeurs_cache : liste des valeurs autorisées pour les droits de type "liste".
+# Pré-chargé ici pour éviter une requête par cellule dans les boucles ci-dessous.
 valeurs_cache: dict[int, list[str]] = {}
 for d in droits:
     if d["type_valeur"] == "liste":
         valeurs_cache[d["id"]] = [v["valeur"] for v in valeurs_list(d["id"])]
 
+# hab_cache : valeur actuelle de chaque cellule (id_profil, id_droit).
+# Ce dict est la source de vérité pour le rendu du tableau et l'export.
 hab_cache: dict[tuple, str | None] = {}
 for p in profils:
     for d in droits:
@@ -52,14 +72,17 @@ for p in profils:
 profil_map = {p["nom"]: p["id"] for p in profils}
 droit_map  = {d["nom"]: d        for d in droits}
 
-# ── Tabs ──────────────────────────────────────────────────────────────────────
+# ── Onglets ───────────────────────────────────────────────────────────────────
 tab_edit, tab_import, tab_lecture = st.tabs(["✏️ Édition", "📥 Import", "🖨️ Vue lecture"])
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# TAB : ÉDITION
+# ONGLET ÉDITION
 # ─────────────────────────────────────────────────────────────────────────────
 with tab_edit:
-    # Construire le DataFrame
+    # Construction du DataFrame : une ligne par profil, une colonne par droit.
+    # Les booléens sont convertis en bool Python (pour les CheckboxColumn),
+    # les listes en chaîne ou "—" pour les SelectboxColumn.
     rows = {}
     for p in profils:
         row = {}
@@ -70,9 +93,10 @@ with tab_edit:
             else:
                 row[d["nom"]] = val if val else "—"
         rows[p["nom"]] = row
-    orig_df = pd.DataFrame(rows).T
+    orig_df = pd.DataFrame(rows).T  # transposée : profils en lignes, droits en colonnes
 
-    # Config colonnes
+    # Configuration des colonnes : CheckboxColumn pour les booléens,
+    # SelectboxColumn avec les valeurs autorisées pour les listes.
     col_cfg: dict = {}
     for d in droits:
         if d["type_valeur"] == "booleen":
@@ -86,15 +110,18 @@ with tab_edit:
         column_config=col_cfg,
         use_container_width=True,
         num_rows="fixed",
-        key="matrix_editor",
+        key="matrix_editor",  # clé de session pour récupérer les modifications
     )
 
-    # Traiter les modifications
+    # Traitement des modifications : data_editor stocke les cellules modifiées
+    # dans st.session_state["matrix_editor"]["edited_rows"] sous la forme
+    # {str(row_idx): {col_name: new_value}}.
     editor_state = st.session_state.get("matrix_editor", {})
     edited_rows  = editor_state.get("edited_rows", {})
     if edited_rows:
         saved = 0
         for row_idx_str, col_changes in edited_rows.items():
+            # Les clés du dict edited_rows sont des strings, même pour des indices entiers.
             row_idx = int(row_idx_str)
             if row_idx >= len(orig_df):
                 continue
@@ -106,6 +133,7 @@ with tab_edit:
                 d = droit_map.get(droit_nom)
                 if not d:
                     continue
+                # Conversion vers le format BDD : "1"/"0" pour booléen, None pour vide
                 if d["type_valeur"] == "booleen":
                     db_val = "1" if new_val else "0"
                 else:
@@ -113,11 +141,11 @@ with tab_edit:
                 habilitation_set(p_id, d["id"], db_val, profil_nom, droit_nom)
                 saved += 1
         if saved:
+            # On vide edited_rows pour éviter de re-sauvegarder au prochain rerun
             st.session_state["matrix_editor"]["edited_rows"] = {}
             st.toast(f"✅ {saved} modification(s) sauvegardée(s)", icon="✅")
             st.rerun()
 
-    # Export Excel
     st.markdown("---")
     xlsx = build_xlsx(selected_app, profils, droits, valeurs_cache, hab_cache)
     st.download_button(
@@ -127,8 +155,9 @@ with tab_edit:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# TAB : IMPORT
+# ONGLET IMPORT
 # ─────────────────────────────────────────────────────────────────────────────
 with tab_import:
     st.markdown("""
@@ -167,6 +196,8 @@ with tab_import:
                     st.dataframe(df_import[["Profil"] + droit_cols], use_container_width=True)
 
                     if st.button("✅ Importer", type="primary"):
+                        # Ensemble des valeurs considérées comme "vrai" pour les booléens.
+                        # Insensible à la casse (raw.lower() lors de la comparaison).
                         _TRUTHY = {"1", "oui", "true", "yes", "x", "✓"}
                         count   = 0
                         errors  = []
@@ -193,11 +224,13 @@ with tab_import:
         except Exception as exc:
             st.error(f"Erreur lors de la lecture du fichier : {exc}")
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# TAB : VUE LECTURE / IMPRESSION
+# ONGLET VUE LECTURE / IMPRESSION
 # ─────────────────────────────────────────────────────────────────────────────
 with tab_lecture:
-    # Construire le HTML de la table
+    # Le tableau est construit en HTML pur pour un rendu précis à l'impression.
+    # La règle CSS @media print masque tout sauf le tableau ciblé par #mat-print.
     th_style = "background:#37306E;color:#FFF5E9;padding:8px 12px;border:1px solid #ccc;font-family:Arial"
     td_prof  = "background:#042638;color:#FFF5E9;padding:6px 10px;border:1px solid #ccc;font-weight:bold;font-family:Arial"
     td_oui   = "background:#4CBFDC;color:#042638;padding:6px 10px;border:1px solid #ccc;text-align:center;font-family:Arial"
@@ -258,5 +291,7 @@ with tab_lecture:
   </table>
 </div>
 """
+    # Hauteur calculée dynamiquement pour éviter le scroll inutile dans l'iframe
+    # que Streamlit utilise pour components.html().
     height = max(300, 60 + len(profils) * 34 + 80)
     components.html(html, height=height, scrolling=True)

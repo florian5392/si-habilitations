@@ -1,11 +1,21 @@
+"""
+pages/1_Etablissements.py — CRUD des établissements.
+
+Un établissement est le niveau racine de l'arborescence :
+    Établissement → Applications → Profils / Droits → Habilitations
+
+La suppression d'un établissement déclenche une cascade MySQL qui supprime
+toutes les applications, profils, droits et habilitations associés.
+"""
+
 import streamlit as st
+import mysql.connector
 
 st.set_page_config(page_title="Établissements", page_icon="🏢", layout="wide")
 
 from utils.ui import apply_styles, require_auth, render_sidebar, page_header, section_title, paginate, request_delete
 from utils.db import run_insert, run_update, audit
 from utils.queries import etablissements_list
-import mysql.connector
 
 apply_styles()
 require_auth()
@@ -24,6 +34,7 @@ with st.expander("Ajouter un établissement", expanded=False):
                     st.success("Établissement ajouté.")
                     st.rerun()
                 except mysql.connector.IntegrityError:
+                    # L'unicité du nom est garantie par la contrainte uk_etab_nom (init.sql).
                     st.error("Un établissement avec ce nom existe déjà.")
             else:
                 st.error("Le nom est obligatoire.")
@@ -35,6 +46,7 @@ if not etabs:
     st.info("Aucun établissement enregistré.")
 else:
     section_title(f"Liste — {len(etabs)} établissement(s)")
+    # paginate() découpe la liste et affiche les contrôles de navigation si > PAGE_SIZE
     for e in paginate(etabs, "etabs"):
         with st.expander(e["nom"]):
             c1, c2 = st.columns([4, 1])
@@ -56,6 +68,7 @@ else:
                 else:
                     st.error("Le nom est obligatoire.")
             if st.button("Supprimer", key=f"etab_del_{e['id']}"):
+                # request_delete() affiche une modale de confirmation avant d'exécuter le DELETE.
                 request_delete(
                     e["nom"],
                     "DELETE FROM etablissements WHERE id=%s",

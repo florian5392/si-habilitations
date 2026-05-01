@@ -1,11 +1,23 @@
+"""
+pages/4_Droits.py — CRUD des droits et de leurs valeurs possibles.
+
+Un droit est lié à une application. Il peut être de deux types :
+  - "booleen" : la valeur est 0 ou 1 (case à cocher dans la matrice)
+  - "liste"   : la valeur est choisie parmi une liste prédéfinie de valeurs
+                (valeurs_liste), ex. Lecture / Écriture / Administration
+
+Les valeurs de liste sont éditables inline (modification ou suppression
+unitaire, ajout d'une nouvelle valeur).
+"""
+
 import streamlit as st
+import mysql.connector
 
 st.set_page_config(page_title="Droits", page_icon="🔑", layout="wide")
 
 from utils.ui import apply_styles, require_auth, render_sidebar, page_header, section_title, paginate, request_delete
 from utils.db import run_insert, run_update, audit
 from utils.queries import applications_list, droits_list, valeurs_list
-import mysql.connector
 
 apply_styles()
 require_auth()
@@ -39,6 +51,8 @@ with st.expander("Ajouter un droit", expanded=False):
                         (selected_app_id, nom.strip(), desc.strip(), type_val),
                     )
                     audit("INSERT", "droits", droit_id, "nom", None, nom.strip())
+                    # On insère les valeurs de liste dès la création du droit,
+                    # en respectant l'ordre de saisie (champ "ordre").
                     if type_val == "liste" and val_input.strip():
                         for i, v in enumerate(val_input.split(",")):
                             v = v.strip()
@@ -72,7 +86,7 @@ else:
                 key=f"droit_type_{d['id']}",
             )
 
-            # Valeurs liste
+            # ── Gestion des valeurs de liste ───────────────────────────────────
             if d["type_valeur"] == "liste":
                 st.markdown("**Valeurs de la liste**")
                 vals = valeurs_list(d["id"])
@@ -83,10 +97,13 @@ else:
                         run_update("DELETE FROM valeurs_liste WHERE id=%s", (v["id"],))
                         audit("DELETE", "valeurs_liste", v["id"])
                         st.rerun()
+                    # La modification est détectée inline (sans bouton dédié) :
+                    # si la valeur a changé, on sauvegarde immédiatement.
                     if new_v != v["valeur"] and new_v.strip():
                         run_update("UPDATE valeurs_liste SET valeur=%s WHERE id=%s", (new_v.strip(), v["id"]))
                         audit("UPDATE", "valeurs_liste", v["id"], "valeur", v["valeur"], new_v.strip())
 
+                # Formulaire d'ajout d'une nouvelle valeur à la liste existante
                 c_add1, c_add2 = st.columns([5, 1])
                 new_v_input = c_add1.text_input("Nouvelle valeur", key=f"droit_newval_{d['id']}")
                 c_add2.write("")
@@ -102,6 +119,7 @@ else:
                         except mysql.connector.IntegrityError:
                             st.error("Cette valeur existe déjà.")
 
+            # ── Modification / suppression du droit ───────────────────────────
             c1, c2 = st.columns(2)
             if c1.button("Modifier", key=f"droit_upd_{d['id']}"):
                 if new_nom.strip():

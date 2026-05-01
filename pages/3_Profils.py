@@ -1,17 +1,30 @@
+"""
+pages/3_Profils.py — CRUD des profils utilisateurs + duplication.
+
+Un profil est lié à une application (FK id_application). Il représente un rôle
+fonctionnel (ex. "Médecin", "Infirmier", "Admin") auquel on associe des droits
+dans la matrice des habilitations.
+
+La fonctionnalité de duplication copie un profil existant avec toutes ses
+habilitations vers un nouveau nom — utile pour créer une variante légèrement
+différente sans tout resaisir.
+"""
+
 import streamlit as st
+import mysql.connector
 
 st.set_page_config(page_title="Profils", page_icon="👥", layout="wide")
 
 from utils.ui import apply_styles, require_auth, render_sidebar, page_header, section_title, paginate, request_delete, request_dup_profil
 from utils.db import run_insert, run_update, audit
 from utils.queries import applications_list, profils_list
-import mysql.connector
 
 apply_styles()
 require_auth()
 selected_etab_id = render_sidebar()
 page_header("👥 Profils")
 
+# On charge les applications filtrées par l'établissement sélectionné en sidebar.
 apps = applications_list(selected_etab_id)
 if not apps:
     st.info("Aucune application disponible. Créez-en une d'abord.")
@@ -48,6 +61,8 @@ if not profils:
     st.info("Aucun profil pour cette application.")
 else:
     section_title(f"Liste — {len(profils)} profil(s)")
+    # La clé de pagination inclut selected_app_id pour que la page se réinitialise
+    # à 1 quand on change d'application.
     for p in paginate(profils, f"profils_{selected_app_id}"):
         with st.expander(p["nom"]):
             new_nom  = st.text_input("Nom",         value=p["nom"],              key=f"prof_nom_{p['id']}")
@@ -69,6 +84,8 @@ else:
                 else:
                     st.error("Le nom est obligatoire.")
             if c2.button("Dupliquer", key=f"prof_dup_{p['id']}"):
+                # On passe id_application explicitement car la requête profils_list
+                # ne le retourne pas dans le dict (optimisation du SELECT).
                 request_dup_profil({**p, "id_application": selected_app_id})
             if c3.button("Supprimer", key=f"prof_del_{p['id']}"):
                 request_delete(

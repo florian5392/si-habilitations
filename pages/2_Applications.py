@@ -1,25 +1,35 @@
+"""
+pages/2_Applications.py — CRUD des applications métier.
+
+Une application appartient à un établissement (FK id_etablissement).
+Le sélecteur de la sidebar filtre la liste par établissement ;
+"— Tous —" affiche toutes les applications de tous les établissements.
+"""
+
 import streamlit as st
+import mysql.connector
 
 st.set_page_config(page_title="Applications", page_icon="📱", layout="wide")
 
 from utils.ui import apply_styles, require_auth, render_sidebar, page_header, section_title, paginate, request_delete
 from utils.db import run_insert, run_update, audit
 from utils.queries import etablissements_list, applications_list
-import mysql.connector
 
 apply_styles()
 require_auth()
-selected_etab_id = render_sidebar()
+selected_etab_id = render_sidebar()  # None si "— Tous —"
 page_header("📱 Applications")
 
+# On charge les établissements pour alimenter le sélecteur du formulaire d'ajout
+# et pour afficher le nom de l'établissement dans la liste.
 etabs = etablissements_list()
 if not etabs:
     st.warning("Aucun établissement. Créez-en un d'abord.")
     st.stop()
 
-etab_map      = {e["id"]: e["nom"] for e in etabs}
-etab_opts     = {e["nom"]: e["id"] for e in etabs}
-etab_keys     = list(etab_opts.keys())
+etab_map  = {e["id"]: e["nom"] for e in etabs}   # id → nom (pour l'affichage en liste)
+etab_opts = {e["nom"]: e["id"] for e in etabs}   # nom → id (pour le formulaire)
+etab_keys = list(etab_opts.keys())
 
 # ── Ajout ─────────────────────────────────────────────────────────────────────
 with st.expander("Ajouter une application", expanded=False):
@@ -44,6 +54,7 @@ with st.expander("Ajouter une application", expanded=False):
                 st.error("Le nom est obligatoire.")
 
 # ── Liste ─────────────────────────────────────────────────────────────────────
+# applications_list() filtre par établissement si selected_etab_id est fourni.
 apps = applications_list(selected_etab_id)
 
 if not apps:
@@ -52,12 +63,15 @@ else:
     section_title(f"Liste — {len(apps)} application(s)")
     for app in paginate(apps, "apps"):
         etab_nom = etab_map.get(app.get("id_etablissement"), "?")
-        label    = app["nom"] if selected_etab_id else f"{app['nom']} — {etab_nom}"
+        # Quand le filtre établissement est actif, l'afficher dans le titre de l'expander
+        # est redondant ; on ne le fait qu'en mode "tous".
+        label = app["nom"] if selected_etab_id else f"{app['nom']} — {etab_nom}"
         with st.expander(label):
             c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
             new_nom  = c1.text_input("Nom",        value=app["nom"]     or "", key=f"app_nom_{app['id']}")
             new_edit = c2.text_input("Éditeur",    value=app["editeur"] or "", key=f"app_edit_{app['id']}")
             new_dom  = c3.text_input("Domaine",    value=app["domaine"] or "", key=f"app_dom_{app['id']}")
+            # On retrouve l'index courant de l'établissement pour pré-sélectionner le bon choix.
             cur_etab = etab_map.get(app.get("id_etablissement"), etab_keys[0])
             cur_idx  = etab_keys.index(cur_etab) if cur_etab in etab_keys else 0
             new_etab = c4.selectbox("Établissement", etab_keys, index=cur_idx, key=f"app_etab_{app['id']}")
